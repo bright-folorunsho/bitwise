@@ -104,3 +104,98 @@
     (ok new-market-id)
   )
 )
+
+;; PREDICTION SUBMISSION SYSTEM
+
+;; Submit Bitcoin Price Prediction
+;; Allows users to stake STX on Bitcoin price direction
+(define-public (submit-prediction
+    (market-id uint)
+    (price-direction (string-ascii 4))
+    (stake-amount uint)
+  )
+  (let (
+      (market-data (unwrap! (map-get? prediction-markets market-id) ERR_RESOURCE_NOT_FOUND))
+      (current-height stacks-block-height)
+    )
+    ;; Market timing validation
+    (asserts!
+      (and
+        (>= current-height (get market-start-height market-data))
+        (< current-height (get market-end-height market-data))
+      )
+      ERR_MARKET_INACTIVE
+    )
+
+    ;; Prediction parameter validation  
+    (asserts! (or (is-eq price-direction "up") (is-eq price-direction "down"))
+      ERR_INVALID_PREDICTION
+    )
+    (asserts! (>= stake-amount (var-get minimum-stake-amount))
+      ERR_INVALID_PREDICTION
+    )
+    (asserts! (<= stake-amount (stx-get-balance tx-sender))
+      ERR_INSUFFICIENT_FUNDS
+    )
+
+    ;; Transfer stake to contract escrow
+    (try! (stx-transfer? stake-amount tx-sender (as-contract tx-sender)))
+
+    ;; Record trader position
+    (map-set trader-positions {
+      market-id: market-id,
+      trader: tx-sender,
+    } {
+      direction: price-direction,
+      staked-amount: stake-amount,
+      rewards-claimed: false,
+    })
+
+    ;; Update market aggregates
+    (map-set prediction-markets market-id
+      (merge market-data {
+        bullish-stake-total: (if (is-eq price-direction "up")
+          (+ (get bullish-stake-total market-data) stake-amount)
+          (get bullish-stake-total market-data)
+        ),
+        bearish-stake-total: (if (is-eq price-direction "down")
+          (+ (get bearish-stake-total market-data) stake-amount)
+          (get bearish-stake-total market-data)
+        ),
+      })
+    )
+
+    (ok true)
+  )
+)
+
+;; ORACLE SETTLEMENT MECHANISM  
+
+;; Resolve Market with Final Price
+;; Oracle-driven market settlement with Bitcoin price data
+(define-public (settle-market
+    (market-id uint)
+    (closing-price uint)
+  )
+  (let ((market-data (unwrap! (map-get? prediction-markets market-id) ERR_RESOURCE_NOT_FOUND)))
+    ;; Oracle authorization check
+    (asserts! (is-eq tx-sender (var-get oracle-principal)) ERR_UNAUTHORIZED)
+
+    ;; Settlement timing and status validation
+    (asserts! (>= stacks-block-height (get market-end-height market-data))
+      ERR_MARKET_INACTIVE
+    )
+    (asserts! (not (get settlement-completed market-data)) ERR_MARKET_INACTIVE)
+    (asserts! (> closing-price u0) ERR_INVALID_PARAMS)
+
+    ;; Finalize market settlement
+    (map-set prediction-markets market-id
+      (merge market-data {
+        final-btc-price: closing-price,
+        settlement-completed: true,
+      })
+    )
+
+    (ok true)
+  )
+)
