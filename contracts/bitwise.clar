@@ -199,3 +199,71 @@
     (ok true)
   )
 )
+
+;; REWARD DISTRIBUTION SYSTEM
+
+;; Claim Prediction Rewards
+;; Proportional payout distribution for winning predictions
+(define-public (claim-rewards (market-id uint))
+  (let (
+      (market-data (unwrap! (map-get? prediction-markets market-id) ERR_RESOURCE_NOT_FOUND))
+      (trader-position (unwrap!
+        (map-get? trader-positions {
+          market-id: market-id,
+          trader: tx-sender,
+        })
+        ERR_RESOURCE_NOT_FOUND
+      ))
+    )
+    ;; Settlement and claim validation
+    (asserts! (get settlement-completed market-data) ERR_MARKET_INACTIVE)
+    (asserts! (not (get rewards-claimed trader-position)) ERR_REWARDS_CLAIMED)
+
+    (let (
+        ;; Determine winning direction based on price movement
+        (winning-direction (if (> (get final-btc-price market-data)
+            (get initial-btc-price market-data)
+          )
+          "up"
+          "down"
+        ))
+        (total-market-stake (+ (get bullish-stake-total market-data)
+          (get bearish-stake-total market-data)
+        ))
+        (winning-pool-stake (if (is-eq winning-direction "up")
+          (get bullish-stake-total market-data)
+          (get bearish-stake-total market-data)
+        ))
+      )
+      ;; Verify trader predicted correctly
+      (asserts! (is-eq (get direction trader-position) winning-direction)
+        ERR_INVALID_PREDICTION
+      )
+
+      (let (
+          ;; Calculate proportional rewards and platform fees
+          (gross-winnings (/ (* (get staked-amount trader-position) total-market-stake)
+            winning-pool-stake
+          ))
+          (platform-fee (/ (* gross-winnings (var-get platform-fee-rate)) u100))
+          (net-payout (- gross-winnings platform-fee))
+        )
+        ;; Execute reward transfer
+        (try! (as-contract (stx-transfer? net-payout (as-contract tx-sender) tx-sender)))
+
+        ;; Transfer platform revenue
+        (try! (as-contract (stx-transfer? platform-fee (as-contract tx-sender) CONTRACT_OWNER)))
+
+        ;; Mark rewards as claimed
+        (map-set trader-positions {
+          market-id: market-id,
+          trader: tx-sender,
+        }
+          (merge trader-position { rewards-claimed: true })
+        )
+
+        (ok net-payout)
+      )
+    )
+  )
+)
