@@ -267,3 +267,77 @@
     )
   )
 )
+
+;; DATA ACCESS & QUERY FUNCTIONS
+
+;; Retrieve Market Information
+(define-read-only (get-market-data (market-id uint))
+  (map-get? prediction-markets market-id)
+)
+
+;; Retrieve Trader Position
+(define-read-only (get-trader-position
+    (market-id uint)
+    (trader principal)
+  )
+  (map-get? trader-positions {
+    market-id: market-id,
+    trader: trader,
+  })
+)
+
+;; Get Contract Treasury Balance
+(define-read-only (get-treasury-balance)
+  (stx-get-balance (as-contract tx-sender))
+)
+
+;; Platform Configuration Overview
+(define-read-only (get-platform-settings)
+  {
+    oracle-address: (var-get oracle-principal),
+    minimum-stake: (var-get minimum-stake-amount),
+    platform-fee: (var-get platform-fee-rate),
+    total-markets: (var-get global-market-id),
+  }
+)
+
+;; ADMINISTRATIVE FUNCTIONS
+
+;; Update Oracle Address
+(define-public (update-oracle-address (new-oracle principal))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (is-eq new-oracle new-oracle) ERR_INVALID_PARAMS)
+    (ok (var-set oracle-principal new-oracle))
+  )
+)
+
+;; Adjust Minimum Stake Requirement
+(define-public (update-minimum-stake (new-minimum uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (> new-minimum u0) ERR_INVALID_PARAMS)
+    (ok (var-set minimum-stake-amount new-minimum))
+  )
+)
+
+;; Modify Platform Fee Rate
+(define-public (update-fee-rate (new-rate uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (<= new-rate u100) ERR_INVALID_PARAMS)
+    (ok (var-set platform-fee-rate new-rate))
+  )
+)
+
+;; Withdraw Platform Revenue
+(define-public (withdraw-treasury (amount uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (<= amount (stx-get-balance (as-contract tx-sender)))
+      ERR_INSUFFICIENT_FUNDS
+    )
+    (try! (as-contract (stx-transfer? amount (as-contract tx-sender) CONTRACT_OWNER)))
+    (ok amount)
+  )
+)
